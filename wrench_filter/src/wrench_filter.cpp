@@ -11,34 +11,28 @@ int main(int argc, char** argv){
   ros::NodeHandle nh;
   ros::NodeHandle pnh("~");
 
-  wrench_filter::WrenchFilterConfig config;
-  pnh.param("hpf_cutoff_hz", config.hpf_cutoff_hz, 20.0);
-  pnh.param("lpf_cutoff_hz", config.lpf_cutoff_hz, 0.3);
-  pnh.param("gain", config.gain, 0.1);
-  pnh.param("hpf_gain", config.hpf_gain, 0.1);
-  pnh.param("lpf_gain", config.lpf_gain, 0.0);
-  pnh.param("rate", config.rate, 100.0);
-
   cpp_filters::IIRFilter<Eigen::VectorXd> lpf;
-  lpf.setParameterAsBiquad(config.lpf_cutoff_hz, 1.0/sqrt(2), config.rate, Eigen::VectorXd::Zero(6));
   cpp_filters::IIRFilter<Eigen::VectorXd> lpf_for_hpf;
-  lpf_for_hpf.setParameterAsBiquad(config.hpf_cutoff_hz, 1.0/sqrt(2), config.rate, Eigen::VectorXd::Zero(6));
-  ros::Rate r(config.rate);
+  ros::Rate r(100);
+  wrench_filter::WrenchFilterConfig config;
+  bool is_initial = true;
 
   dynamic_reconfigure::Server<wrench_filter::WrenchFilterConfig> cfgServer_;
-  cfgServer_.setConfigDefault(config);
-  cfgServer_.updateConfig(config);
   cfgServer_.setCallback([&](wrench_filter::WrenchFilterConfig& config_in, int32_t level){
-      if(config.lpf_cutoff_hz != config_in.lpf_cutoff_hz ||
+      if(is_initial ||
+         config.lpf_cutoff_hz != config_in.lpf_cutoff_hz ||
          config.rate != config_in.rate)
         lpf.setParameterAsBiquad(config_in.lpf_cutoff_hz, 1.0/sqrt(2), config_in.rate, lpf.get());
-      if(config.hpf_cutoff_hz != config_in.hpf_cutoff_hz ||
+      if(is_initial ||
+         config.hpf_cutoff_hz != config_in.hpf_cutoff_hz ||
          config.rate != config_in.rate)
         lpf_for_hpf.setParameterAsBiquad(config_in.hpf_cutoff_hz, 1.0/sqrt(2), config_in.rate, lpf_for_hpf.get());
-      if(config.rate != config_in.rate)
+      if(is_initial ||
+         config.rate != config_in.rate)
         r = ros::Rate(config_in.rate);
       config = config_in;
-    });//setCallbackの中でcallbackが呼ばれるので、その前にupdateConfigを呼ぶ必要がある
+      is_initial = false;
+    });
 
   Eigen::VectorXd wrench = Eigen::VectorXd::Zero(6);
   std::string frame_id;
@@ -67,14 +61,18 @@ int main(int argc, char** argv){
     const Eigen::VectorXd w_lp = lpf.passFilter( wrench );
     const Eigen::VectorXd w_shaped = wrench * config.gain + w_hp * config.hpf_gain + w_lp * config.lpf_gain;
 
+    Eigen::VectorXd wrench_limited(6);
+    for(int i=0;i<3;i++) wrench_limited[i] = std::max(std::min(w_shaped[i], config.max_force), -config.max_force);
+    for(int i=3;i<6;i++) wrench_limited[i] = std::max(std::min(w_shaped[i], config.max_torque), -config.max_torque);
+
     msg.header.stamp = ros::Time::now();
     msg.header.frame_id = frame_id;
-    msg.wrench.force.x = w_shaped[0];
-    msg.wrench.force.y = w_shaped[1];
-    msg.wrench.force.z = w_shaped[2];
-    msg.wrench.torque.x = w_shaped[3];
-    msg.wrench.torque.y = w_shaped[4];
-    msg.wrench.torque.z = w_shaped[5];
+    msg.wrench.force.x = wrench_limited[0];
+    msg.wrench.force.y = wrench_limited[1];
+    msg.wrench.force.z = wrench_limited[2];
+    msg.wrench.torque.x = wrench_limited[3];
+    msg.wrench.torque.y = wrench_limited[4];
+    msg.wrench.torque.z = wrench_limited[5];
     pub.publish(msg);
 
     r.sleep();
