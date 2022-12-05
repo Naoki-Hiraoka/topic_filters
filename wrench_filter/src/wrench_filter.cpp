@@ -12,7 +12,9 @@ int main(int argc, char** argv){
   ros::NodeHandle pnh("~");
 
   cpp_filters::IIRFilter<Eigen::VectorXd> lpf;
+  lpf.setParameterAsBiquad(1.0, 1.0/sqrt(2), 100.0, Eigen::VectorXd::Zero(6));
   cpp_filters::IIRFilter<Eigen::VectorXd> lpf_for_hpf;
+  lpf_for_hpf.setParameterAsBiquad(50.0, 1.0/sqrt(2), 100.0, Eigen::VectorXd::Zero(6));
   ros::Rate r(100);
   wrench_filter::WrenchFilterConfig config;
   bool is_initial = true;
